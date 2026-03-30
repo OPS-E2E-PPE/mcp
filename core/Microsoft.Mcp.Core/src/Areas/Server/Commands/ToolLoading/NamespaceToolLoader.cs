@@ -366,21 +366,51 @@ public sealed class NamespaceToolLoader(
                 return await InvokeToolLearn(request, intent, namespaceName, cancellationToken);
             }
 
-            // Check if this tool requires elicitation for sensitive data
-            var metadata = cmd.Metadata;
-            if (metadata.Secret)
+            // Enforce read-only mode at execution time
+            if ((_options.Value.ReadOnly ?? false) && !cmd.Metadata.ReadOnly)
             {
-                var elicitationResult = await HandleSecretElicitationAsync(
-                    request,
-                    $"{namespaceName} {command}",
-                    _options.Value.DangerouslyDisableElicitation,
-                    _logger,
-                    cancellationToken);
-
-                if (elicitationResult != null)
+                return new CallToolResult
                 {
-                    return elicitationResult;
-                }
+                    Content =
+                    [
+                        new TextContentBlock
+                        {
+                            Text = $"Tool '{namespaceName} {command}' is not available. This server is configured in read-only mode and this tool is not a read-only tool.",
+                        }
+                    ],
+                    IsError = true,
+                };
+            }
+
+            // Enforce HTTP mode restrictions at execution time
+            if (_options.Value.IsHttpMode && cmd.Metadata.LocalRequired)
+            {
+                return new CallToolResult
+                {
+                    Content =
+                    [
+                        new TextContentBlock
+                        {
+                            Text = $"Tool '{namespaceName} {command}' is not available. This server is running in HTTP mode and this tool requires local execution.",
+                        }
+                    ],
+                    IsError = true,
+                };
+            }
+
+            // Check if this tool requires elicitation for sensitive or destructive operations
+            var metadata = cmd.Metadata;
+            var elicitationResult = await HandleElicitationAsync(
+                request,
+                $"{namespaceName} {command}",
+                metadata,
+                _options.Value.DangerouslyDisableElicitation,
+                _logger,
+                cancellationToken);
+
+            if (elicitationResult != null)
+            {
+                return elicitationResult;
             }
 
             var currentActivity = Activity.Current;
